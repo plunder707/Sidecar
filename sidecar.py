@@ -187,29 +187,21 @@ class Sidecar:
             TimeoutError:
                 If execution exceeds timeout
         """
-        # --- Deadlock detection: thread + loop checks ----------------------
-        # Helper to close the coroutine and raise a RuntimeError cleanly
+        # Deadlock detection: thread + loop checks
         def _deadlock(msg: str) -> None:
-            # Best-effort: if this is a coroutine object, close it so we don't
-            # leak a "coroutine was never awaited" warning.
             if asyncio.iscoroutine(coro):
                 try:
                     coro.close()
                 except RuntimeError:
-                    # If it's somehow already running/closed, ignore
                     pass
             raise RuntimeError(msg)
 
-        # 1) If we're running on the Sidecar's own thread, we MUST NOT block
-        #    waiting for that loop, or we will deadlock.
         if self._thread and self._thread.is_alive() and threading.current_thread() is self._thread:
             _deadlock(
                 "Deadlock detected: run_sync() called from within Sidecar loop thread. "
                 "Use 'await' instead."
             )
 
-        # 2) Additionally, if Python reports a running loop that *is* our loop,
-        #    treat that as a deadlock scenario too (extra safety).
         try:
             current_loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -221,7 +213,7 @@ class Sidecar:
                     "Use 'await' instead."
                 )
 
-        # --- Context propagation -------------------------------------------
+        # Context propagation
         ctx = contextvars.copy_context()
 
         async def wrapped() -> T:
@@ -234,7 +226,7 @@ class Sidecar:
                 for var, token in tokens:
                     var.reset(token)
 
-        # --- Submit to loop thread ----------------------------------------
+        # Submit to loop thread
         with self._lock:
             if not self._loop:
                 self._start()
@@ -246,7 +238,7 @@ class Sidecar:
             future = asyncio.run_coroutine_threadsafe(coro_to_run, self._loop)
             self._stats.tasks_submitted += 1
 
-        # --- Wait for result ----------------------------------------------
+        # Wait for result
         try:
             result = future.result(timeout=timeout if timeout else None)
             with self._lock:
@@ -256,8 +248,6 @@ class Sidecar:
             with self._lock:
                 self._stats.tasks_failed += 1
             raise
-
-
 
     def submit(self, coro: Coroutine[Any, Any, Any]) -> Future:
         """
@@ -320,10 +310,8 @@ class Sidecar:
                             q.put_nowait(("data", item))
                             break
                         except Full:
-                            # Backpressure: let the consumer catch up
                             await asyncio.sleep(0.01)
 
-                # Signal completion
                 while True:
                     try:
                         q.put_nowait(("done", None))
@@ -331,7 +319,6 @@ class Sidecar:
                     except Full:
                         await asyncio.sleep(0.01)
             except Exception as e:
-                # Best-effort error forwarding
                 while True:
                     try:
                         q.put_nowait(("error", e))
