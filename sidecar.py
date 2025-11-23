@@ -1,26 +1,3 @@
-"""
-sidecar.py - Universal Async/Sync Bridge
-
-Use any async library in sync code. Works everywhere.
-
-COMPATIBILITY:
-- Python 3.9+: ProcessPool (works everywhere)
-- Python 3.13t: Free-Threading (zero overhead)
-- Python 3.14+: Sub-Interpreters (40x faster data transfer)
-
-USAGE:
-    from sidecar import run_sync
-
-    # Use httpx in sync code
-    response = run_sync(httpx.get("https://api.com"))
-
-    # Use aiohttp in Flask/Django
-    data = run_sync(aiohttp_fetch(...))
-
-    # Works in Jupyter notebooks (no "loop already running" errors)
-    df = pd.DataFrame(run_sync(fetch_async_data()))
-"""
-
 from __future__ import annotations
 
 import asyncio
