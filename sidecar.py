@@ -36,7 +36,7 @@ from concurrent.futures import Future, ThreadPoolExecutor, ProcessPoolExecutor
 from typing import TypeVar, Callable, Optional, AsyncGenerator, Any, Coroutine, Generator
 from dataclasses import dataclass
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 __all__ = ["Sidecar", "run_sync", "submit", "stream", "run_cpu", "shutdown"]
 
 logger = logging.getLogger("sidecar")
@@ -186,21 +186,23 @@ class Sidecar:
             RuntimeError: If called from within the Sidecar loop (deadlock)
             TimeoutError: If execution exceeds timeout
         """
-        # Deadlock detection: if called from the bridge thread or its loop,
-        # raise immediately to avoid deadlocks.
+        def _fail_deadlock(msg: str):
+            """Clean up coro and raise error."""
+            if asyncio.iscoroutine(coro):
+                coro.close()
+            raise RuntimeError(msg)
+
+        # Deadlock detection: if called from the bridge thread or its loop
         if self._thread and self._thread.is_alive() and threading.current_thread() is self._thread:
-            raise RuntimeError(
-                "Deadlock detected: run_sync() called from within Sidecar loop thread. Use 'await' instead."
-            )
+            _fail_deadlock("Deadlock detected: run_sync() called from within Sidecar loop thread. Use 'await' instead.")
+
         try:
             current_loop = asyncio.get_running_loop()
         except RuntimeError:
             current_loop = None
         else:
             if current_loop is self._loop:
-                raise RuntimeError(
-                    "Deadlock detected: run_sync() called while Sidecar loop is running. Use 'await' instead."
-                )
+                _fail_deadlock("Deadlock detected: run_sync() called while Sidecar loop is running. Use 'await' instead.")
         
         # Capture context from calling thread
         ctx = contextvars.copy_context()
@@ -229,33 +231,64 @@ class Sidecar:
     def submit(self, coro: Coroutine[Any, Any, Any]) -> Future:
         """
         Fire-and-forget async execution.
-        
+
         Args:
             coro: Coroutine to execute
-        
+
         Returns:
-            Future for tracking completion
-        
+            Future that can be used to observe completion or exceptions.
+
+        Semantics:
+        - tasks_submitted is incremented immediately.
+        - tasks_completed / tasks_failed are incremented when the coroutine
+          actually finishes, independent of run_sync().
+        - Context variables from the caller are propagated into the async task.
+
         Example:
             bridge.submit(send_notification(user_id))
         """
-        # Capture context from calling thread
+        if not asyncio.iscoroutine(coro):
+            raise TypeError(f"submit() expected a coroutine, got {type(coro)!r}")
+
+        # Capture context from the calling thread so contextvars propagate
         ctx = contextvars.copy_context()
 
-        async def wrapped():
+        async def wrapped() -> Any:
+            # Run the original coroutine under the captured context
             return await coro
 
+        def _on_done(fut: Future) -> None:
+            """
+            Done callback executed in the loop thread when the task finishes.
+            Updates BridgeStats based on success vs failure.
+            """
+            with self._lock:
+                try:
+                    # This will re-raise if the coroutine failed
+                    fut.result()
+                except Exception:
+                    self._stats.tasks_failed += 1
+                else:
+                    self._stats.tasks_completed += 1
+
         with self._lock:
+            # Ensure background loop is running
             if not self._loop:
                 self._start()
             assert self._loop is not None
 
-            # Create coroutine under caller's Context so contextvars are preserved
+            # Build the coroutine object inside the captured context
             coro_to_run = ctx.run(lambda: wrapped())
             future = asyncio.run_coroutine_threadsafe(coro_to_run, self._loop)
+
+            # Book-keeping: we attempted to run one more task
             self._stats.tasks_submitted += 1
+
+            # When it finishes, update completed/failed counters
+            future.add_done_callback(_on_done)
+
             return future
-    
+
     def stream(
         self,
         async_gen: AsyncGenerator[T, None],
