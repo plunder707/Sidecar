@@ -36,7 +36,7 @@ No extra dependencies. Works in any project layout.
 ## 📣 Sidecar Information
 
 * **Python 3.14 Ready** – PEP 734-style subinterpreters via InterpreterPoolExecutor
-* **Free-threading Support (3.13t)** – Automatically leverages the no-GIL runtime when available.
+* **Free-threading Support (3.13, no-GIL)** – Automatically leverages the no-GIL runtime when available.
 * **Deadlock Protection** – Recursive or nested calls are guarded with loop detection to avoid freezes.
 * **Context-Aware** – Fully supports `contextvars` so things like request IDs and traces survive the bridge.
 
