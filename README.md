@@ -1,5 +1,3 @@
-````markdown
-````
 # Sidecar  
 **Universal Async/Sync Bridge**
 
@@ -8,7 +6,6 @@ Run any async library from synchronous code – safely and cleanly – without `
 Bridge **httpx**, **Playwright**, **FastAPI**, and more into **Flask**, **Django**, CLIs, or scripts.
 
 ---
-
 ## ✨ Universal Compatibility
 
 Sidecar auto-detects your Python runtime and picks the fastest safe execution engine.
