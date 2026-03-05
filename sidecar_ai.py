@@ -2,10 +2,11 @@
 sidecar_ai.py — Universal AI Server Adapter
 ============================================
 
-Turns any sync agent into a concurrent, multi-GPU-ready OpenAI-compatible
-API server. Built on sidecar.py's async/sync bridge.
+Turns any sync agent into a concurrent, multi-GPU-ready server.
+Speaks both OpenAI-compatible HTTP (AIServer) and MCP (MCPServer).
+Built on sidecar.py's async/sync bridge.
 
-QUICK START (3 lines):
+OPENAI HTTP — works with benchmarks, curl, OpenAI SDK:
 
     from sidecar_ai import AIServer, auto_discover
 
@@ -14,13 +15,25 @@ QUICK START (3 lines):
         sessions=4,
         endpoints=auto_discover(),
     )
-    server.serve()
+    server.serve()   # localhost:8000
+
+MCP — works with Claude Desktop, Claude Code, Cursor:
+
+    from sidecar_ai import MCPServer, auto_discover
+
+    server = MCPServer(
+        agent_factory=lambda ep: MyAgent(vlm_endpoint=ep),
+        sessions=4,
+        endpoints=auto_discover(),
+    )
+    server.serve()                                    # stdio (Claude Desktop)
+    server.serve(transport="http", port=8001)         # HTTP (remote)
 
 AGENT INTERFACE:
     Your agent needs exactly one method:
         def process_turn(self, user_input: str) -> str
 
-    That's it. Works with ChatAI, LangChain, LlamaIndex, or any custom agent.
+    Works with ChatAI, LangChain, LlamaIndex, or any custom agent.
 
 THREAD ISOLATION:
     Each session gets its own ThreadPoolExecutor(max_workers=1).
@@ -57,6 +70,7 @@ __all__ = [
     "AgentSession",
     "SessionPool",
     "AIServer",
+    "MCPServer",
 ]
 
 # ── Optional: FastAPI + uvicorn ────────────────────────────────────────────────
@@ -69,6 +83,14 @@ try:
     _HAS_FASTAPI = True
 except ImportError:
     _HAS_FASTAPI = False
+
+# ── Optional: FastMCP ──────────────────────────────────────────────────────────
+try:
+    from fastmcp import Context, FastMCP
+
+    _HAS_FASTMCP = True
+except ImportError:
+    _HAS_FASTMCP = False
 
 
 # ── Endpoint Discovery ─────────────────────────────────────────────────────────
@@ -528,3 +550,152 @@ class AIServer:
     def app(self) -> "FastAPI":
         """The underlying FastAPI app (for ASGI testing or custom integration)."""
         return self._app
+
+
+# ── MCP Server ─────────────────────────────────────────────────────────────────
+
+
+class MCPServer:
+    """
+    MCP server wrapping any sync agent. Works with Claude Desktop, Claude Code,
+    Cursor, and any other MCP client.
+
+    Uses FastMCP v3+ under the hood. Same SessionPool as AIServer — same
+    thread isolation, same endpoint routing, different wire protocol.
+
+    Transports:
+        stdio            → Claude Desktop / Claude Code (default)
+        http             → Remote HTTP (modern MCP clients)
+        sse              → Server-Sent Events (legacy MCP clients)
+        streamable-http  → Streamable HTTP
+
+    Args:
+        agent_factory: Callable(vlm_endpoint: str) -> agent.
+                       Called once per session at startup.
+        sessions:      Number of concurrent sessions (default: 2).
+        endpoints:     LLM endpoint URLs. If None, auto_discover() is called.
+        name:          MCP server name shown to clients (default: "sidecar-ai").
+
+    Example — Claude Desktop (stdio):
+        server = MCPServer(
+            agent_factory=lambda ep: ChatAI(vlm_endpoint=ep),
+            sessions=2,
+        )
+        server.serve()   # add to claude_desktop_config.json
+
+    Example — Remote HTTP:
+        server = MCPServer(
+            agent_factory=lambda ep: ChatAI(vlm_endpoint=ep),
+            sessions=4,
+            endpoints=["http://localhost:1234", "http://localhost:1235"],
+        )
+        server.serve(transport="http", host="0.0.0.0", port=8001)
+    """
+
+    def __init__(
+        self,
+        agent_factory: Callable[[str], Any],
+        sessions: int = 2,
+        endpoints: Optional[List[str]] = None,
+        name: str = "sidecar-ai",
+    ) -> None:
+        if not _HAS_FASTMCP:
+            raise ImportError(
+                "MCPServer requires FastMCP:\n"
+                "  pip install fastmcp"
+            )
+
+        if endpoints is None:
+            print("[sidecar-ai] Discovering endpoints...")
+            endpoints = auto_discover()
+
+        if not endpoints:
+            print("[sidecar-ai] No endpoints found, defaulting to http://localhost:1234")
+            endpoints = ["http://localhost:1234"]
+
+        self._agent_factory = agent_factory
+        self._n_sessions = sessions
+        self._endpoints = endpoints
+        self._name = name
+
+        # Build the FastMCP app with a lifespan that owns the SessionPool.
+        # The lifespan runs inside the event loop — asyncio.Queue() is created
+        # correctly, and SessionPool is torn down cleanly on shutdown.
+        self._mcp = self._build_mcp()
+
+    def _build_mcp(self) -> "FastMCP":
+        agent_factory = self._agent_factory
+        n_sessions = self._n_sessions
+        endpoints = self._endpoints
+
+        @asynccontextmanager
+        async def pool_lifespan(server: "FastMCP"):
+            """Create SessionPool at startup, tear down at shutdown."""
+            router = EndpointRouter(endpoints)
+            print(
+                f"[sidecar-ai] Initializing {n_sessions} MCP sessions "
+                f"across {len(endpoints)} endpoint(s)..."
+            )
+            pool = SessionPool.create(agent_factory, n_sessions, router)
+            print("[sidecar-ai] MCP server ready.")
+            yield {"pool": pool}
+            pool.shutdown(wait=False)
+
+        mcp = FastMCP(self._name, lifespan=pool_lifespan)
+
+        @mcp.tool
+        async def process_turn(message: str, ctx: Context) -> str:
+            """
+            Send a message to the AI agent and get a response.
+
+            Args:
+                message: The user message or question for the agent.
+
+            Returns:
+                The agent's response as a string.
+            """
+            pool: SessionPool = ctx.lifespan_context["pool"]
+            loop = asyncio.get_running_loop()
+            async with pool.acquire() as session:
+                return await loop.run_in_executor(
+                    session.executor,
+                    session.agent.process_turn,
+                    message,
+                )
+
+        @mcp.tool
+        async def get_status(ctx: Context) -> dict:
+            """
+            Get the current server status.
+
+            Returns:
+                Dict with sessions_total, sessions_available, and endpoints.
+            """
+            pool: SessionPool = ctx.lifespan_context["pool"]
+            return {
+                "sessions_total": pool.size,
+                "sessions_available": pool.available,
+                "endpoints": endpoints,
+            }
+
+        return mcp
+
+    def serve(self, transport: str = "stdio", **kwargs: Any) -> None:
+        """
+        Start the MCP server. Blocks until stopped.
+
+        Args:
+            transport: "stdio" (default), "http", "sse", or "streamable-http".
+            **kwargs:  Passed to FastMCP.run() — e.g. host="0.0.0.0", port=8001.
+
+        Examples:
+            server.serve()                                  # stdio → Claude Desktop
+            server.serve(transport="http", port=8001)       # HTTP → remote clients
+            server.serve(transport="sse", port=8001)        # SSE → legacy clients
+        """
+        self._mcp.run(transport=transport, **kwargs)
+
+    @property
+    def mcp(self) -> "FastMCP":
+        """The underlying FastMCP instance (for advanced configuration)."""
+        return self._mcp

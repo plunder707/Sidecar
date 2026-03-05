@@ -349,10 +349,45 @@ class MyAgent:
 | 2 GPUs, 2 LM Studio | `sessions=4, endpoints=["...:1234", "...:1235"]` | 4 concurrent users, 2 backends |
 | 2 GPUs, 1 vLLM (tensor parallel) | `sessions=4, endpoints=["...:8000"]` | 4 concurrent users, 1 big model |
 
+### MCP Support — Claude Desktop, Claude Code, Cursor
+
+`MCPServer` wraps the same `SessionPool` in MCP protocol instead of HTTP.
+Any MCP client (Claude Desktop, Claude Code, Cursor) can call your agent as a tool.
+
+```python
+from sidecar_ai import MCPServer, auto_discover
+
+server = MCPServer(
+    agent_factory=lambda ep: MyAgent(vlm_endpoint=ep),
+    sessions=2,
+    endpoints=auto_discover(),
+)
+server.serve()                                   # stdio → Claude Desktop / Claude Code
+server.serve(transport="http", port=8001)        # HTTP  → remote MCP clients
+server.serve(transport="sse",  port=8001)        # SSE   → legacy MCP clients
+```
+
+For Claude Desktop, add to `claude_desktop_config.json`:
+```json
+{
+  "mcpServers": {
+    "my-agent": {
+      "command": "python",
+      "args": ["/path/to/my_mcp_server.py"]
+    }
+  }
+}
+```
+
+Tools exposed via MCP:
+- `process_turn(message)` — send a message, get a response
+- `get_status()` — pool size, available sessions, endpoints
+
 ### Install
 
 ```bash
-pip install fastapi uvicorn   # sidecar.py has no deps; sidecar_ai.py adds these
+pip install fastapi uvicorn   # for AIServer (OpenAI HTTP)
+pip install fastmcp           # for MCPServer (MCP protocol)
 ```
 
 See `examples/single_gpu.py` and `examples/multi_gpu.py` for runnable templates.
