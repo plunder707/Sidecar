@@ -4,7 +4,7 @@ sidecar_ai.py — Universal AI Server Adapter
 
 Turns any sync agent into a concurrent, multi-GPU-ready server.
 Speaks both OpenAI-compatible HTTP (AIServer) and MCP (MCPServer).
-Built on sidecar.py's async/sync bridge.
+Part of the Sidecar project — a companion to sidecar.py.
 
 OPENAI HTTP — works with benchmarks, curl, OpenAI SDK:
 
