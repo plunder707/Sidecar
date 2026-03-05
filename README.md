@@ -275,6 +275,89 @@ Use separate `Sidecar` instances for:
 * Tenant- or feature-specific isolation
 
 ---
+
+## 🤖 AI Server — `sidecar_ai.py`
+
+Turn any sync AI agent into a **concurrent, multi-GPU-ready OpenAI-compatible server** — in 3 lines.
+
+### The problem it solves
+
+Sync AI agents that use thread-affine tools (Playwright browser automation, psycopg3, etc.) are stuck at `ThreadPoolExecutor(max_workers=1)` — **one concurrent user, max**. Swapping backends or adding a second GPU requires custom plumbing.
+
+`sidecar_ai.py` fixes this automatically.
+
+### Architecture
+
+```
+User A ──┐
+User B ──┤──► FastAPI (async) ──► SessionPool ──► AgentSession 0 → ThreadExec → GPU 0
+User C ──┤                             │        ──► AgentSession 1 → ThreadExec → GPU 0
+User D ──┘                             │        ──► AgentSession 2 → ThreadExec → GPU 1
+                                       │        ──► AgentSession 3 → ThreadExec → GPU 1
+                                  (async wait                     ▲
+                                  if all busy)            EndpointRouter
+                                                          (round-robin)
+```
+
+Each session has its **own OS thread** — Playwright and other thread-affine tools are safe.
+Callers wait **async** (not blocking) when all sessions are busy.
+
+### Quick Start
+
+```python
+from sidecar_ai import AIServer, auto_discover
+
+server = AIServer(
+    agent_factory=lambda ep: MyAgent(vlm_endpoint=ep),
+    sessions=4,                  # concurrent users
+    endpoints=auto_discover(),   # finds LM Studio / Ollama / vLLM automatically
+)
+server.serve()  # OpenAI-compatible API on localhost:8000
+```
+
+Your agent needs exactly one method:
+
+```python
+class MyAgent:
+    def __init__(self, vlm_endpoint: str): ...
+    def process_turn(self, user_input: str) -> str: ...
+```
+
+### Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/health` | Pool status, session counts, active endpoints |
+| `POST` | `/chat` | Simple: `{"message": "..."}` → `{"response": "..."}` |
+| `POST` | `/v1/chat/completions` | Full OpenAI-compatible (system prompt forwarding) |
+
+### Backend Compatibility
+
+| Backend | Default Port | Auto-discovered |
+|---------|-------------|-----------------|
+| LM Studio | 1234 | ✓ |
+| Ollama | 11434 | ✓ |
+| vLLM / SGLang | 8000 | ✓ |
+| text-gen-webui | 7860 | ✓ |
+| OpenAI API | — | Pass URL directly |
+
+### 1 GPU vs 2 GPUs
+
+| Setup | Config | Result |
+|-------|--------|--------|
+| 1 GPU, 1 LM Studio | `sessions=2, endpoints=auto_discover()` | 2 concurrent users, 1 backend |
+| 2 GPUs, 2 LM Studio | `sessions=4, endpoints=["...:1234", "...:1235"]` | 4 concurrent users, 2 backends |
+| 2 GPUs, 1 vLLM (tensor parallel) | `sessions=4, endpoints=["...:8000"]` | 4 concurrent users, 1 big model |
+
+### Install
+
+```bash
+pip install fastapi uvicorn   # sidecar.py has no deps; sidecar_ai.py adds these
+```
+
+See `examples/single_gpu.py` and `examples/multi_gpu.py` for runnable templates.
+
+---
 ---
 
 ## 📝 Notes
