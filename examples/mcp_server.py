@@ -5,7 +5,7 @@ mcp_server.py — Sidecar AI Server: MCP Example
 Exposes your sync agent as an MCP tool — works with Claude Desktop,
 Claude Code, Cursor, and any other MCP client.
 
-Replace MyAgent with your actual agent (ChatAI, LangChain, etc.).
+Replace MyAgent with your actual agent (LangChain, LlamaIndex, etc.).
 
 STDIO (Claude Desktop / Claude Code):
     python examples/mcp_server.py

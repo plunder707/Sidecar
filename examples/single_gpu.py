@@ -6,7 +6,7 @@ Minimal setup to turn any sync agent into a concurrent API server.
 2 sessions share 1 GPU endpoint. Both requests run concurrently —
 one waits async while the other is processing, no thread blocking.
 
-Replace MyAgent with your actual agent (ChatAI, LangChain, etc.).
+Replace MyAgent with your actual agent (LangChain, LlamaIndex, etc.).
 
 Usage:
     pip install fastapi uvicorn
@@ -34,7 +34,8 @@ class MyAgent:
     Minimal stub agent. Replace with your real agent class.
 
     Requirements:
-        - __init__(self, vlm_endpoint: str)  — receives the LLM endpoint URL
+        - __init__(self, vlm_endpoint: str)  — receives the backend endpoint URL
+          (LM Studio, Ollama, vLLM, SGLang, OpenAI API — anything OpenAI-compatible)
         - process_turn(self, user_input: str) -> str  — one call per request
     """
 

@@ -33,7 +33,7 @@ AGENT INTERFACE:
     Your agent needs exactly one method:
         def process_turn(self, user_input: str) -> str
 
-    Works with ChatAI, LangChain, LlamaIndex, or any custom agent.
+    Works with LangChain agents, LlamaIndex query engines, or any custom agent.
 
 THREAD ISOLATION:
     Each session gets its own ThreadPoolExecutor(max_workers=1).
@@ -330,7 +330,7 @@ class AIServer:
 
     Example:
         server = AIServer(
-            agent_factory=lambda ep: ChatAI(vlm_endpoint=ep),
+            agent_factory=lambda ep: MyAgent(vlm_endpoint=ep),
             sessions=4,
             endpoints=auto_discover(),
         )
@@ -578,14 +578,14 @@ class MCPServer:
 
     Example — Claude Desktop (stdio):
         server = MCPServer(
-            agent_factory=lambda ep: ChatAI(vlm_endpoint=ep),
+            agent_factory=lambda ep: MyAgent(vlm_endpoint=ep),
             sessions=2,
         )
         server.serve()   # add to claude_desktop_config.json
 
     Example — Remote HTTP:
         server = MCPServer(
-            agent_factory=lambda ep: ChatAI(vlm_endpoint=ep),
+            agent_factory=lambda ep: MyAgent(vlm_endpoint=ep),
             sessions=4,
             endpoints=["http://localhost:1234", "http://localhost:1235"],
         )
